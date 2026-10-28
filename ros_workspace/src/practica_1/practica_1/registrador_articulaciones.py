@@ -16,6 +16,11 @@ from practica_1.control_robot import ARTICULACIONES
 # de velocidad absurdos, así que se deriva respecto a la muestra de hace ~VENTANA_DERIVADA
 VENTANA_DERIVADA = 0.05  # [s]
 
+# Si ninguna articulación supera esta velocidad se considera que el robot está parado.
+# En la simulación la posición de un robot quieto no cambia nada, así que con un valor
+# pequeño basta para distinguirlo
+UMBRAL_VELOCIDAD = 0.001  # [rad/s]
+
 # (tiempo [s], un valor por articulación)
 Muestra = Tuple[float, List[float]]
 
@@ -62,7 +67,7 @@ class RegistradorArticulaciones(Node):
         self.get_logger().info(f"Guardadas {len(filas)} muestras en {ruta}")
 
     def _cb_joint_states(self, mensaje: JointState) -> None:
-        """Deriva la nueva lectura de posición y, si hay trayectoria activa, la guarda."""
+        """Deriva la nueva lectura de posición y la guarda si el robot se está moviendo."""
         # El mensaje no trae las articulaciones en un orden fijo y la pinza puede
         # publicar mensajes propios sin las del brazo: se reordenan o se descartan
         try:
@@ -78,8 +83,18 @@ class RegistradorArticulaciones(Node):
         velocidad = self._derivar(self._historial_posicion, tiempo, posicion)
         aceleracion = self._derivar(self._historial_velocidad, tiempo, velocidad)
 
-        if self._trayectoria_actual is not None:
-            self._filas.append([tiempo] + posicion + velocidad + aceleracion)
+        if self._trayectoria_actual is None:
+            return
+        # Ingesta inteligente: los ratos en los que el robot está quieto (justo antes de
+        # arrancar y después de frenar) no se guardan
+        if not self._robot_en_movimiento(velocidad):
+            return
+        self._filas.append([tiempo] + posicion + velocidad + aceleracion)
+
+    @staticmethod
+    def _robot_en_movimiento(velocidad: List[float]) -> bool:
+        """Indica si alguna articulación se mueve más rápido que UMBRAL_VELOCIDAD."""
+        return any(abs(v) > UMBRAL_VELOCIDAD for v in velocidad)
 
     @staticmethod
     def _derivar(historial: Deque[Muestra], tiempo: float, valores: List[float]) -> List[float]:
