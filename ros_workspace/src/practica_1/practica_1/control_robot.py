@@ -37,10 +37,26 @@ FACTOR_ESCALA = 0.1  # Velocidad y aceleración máximas (fracción de las máxi
 
 
 class ControlRobot(Node):
-    """Control del robot con MoveIt 2 a través de sus acciones y servicios (move_group)."""
+    """Nodo que controla el robot con MoveIt 2 a través de move_group.
+
+    Usa las acciones y servicios de MoveIt para planificar y ejecutar movimientos,
+    tf para saber dónde está la pinza y /joint_states para saber los ángulos
+    actuales. Los callbacks se atienden en un hilo aparte (atributo `ejecutor`), así
+    que sus métodos de movimiento se pueden llamar desde el hilo principal y
+    esperan a que el robot termine.
+    """
 
     def __init__(self, id_robot: str = "") -> None:
-        """id_robot: "" para un robot individual, o "203", "204"... en las escenas con dos robots."""
+        """Crea el nodo, conecta con MoveIt y añade el suelo a la escena.
+
+        Se bloquea hasta que MoveIt está disponible y se ha recibido la posición de
+        todas las articulaciones.
+
+        Args:
+            id_robot: "" para un robot individual, o "203", "204"... en las escenas
+                con dos robots (se usa como prefijo de los nombres del grupo, del
+                efector final y de las articulaciones).
+        """
         super().__init__("control_robot")
         if id_robot:
             self.group_name = f"robot_{id_robot}"
@@ -80,23 +96,49 @@ class ControlRobot(Node):
         self.añadir_suelo()
 
     def __cb_joint_states(self, msg: JointState) -> None:
-        """Guarda la última posición recibida de cada articulación."""
+        """Guarda la última posición recibida de cada articulación.
+
+        Args:
+            msg: mensaje de /joint_states con nombres y posiciones [rad].
+        """
         for nombre, posicion in zip(msg.name, msg.position):
             self.__estado_articulaciones[nombre] = posicion
 
     @staticmethod
     def __esperar(future):
-        """Espera de forma activa a que termine `future` y devuelve su resultado."""
+        """Espera de forma activa a que termine una operación asíncrona de ROS.
+
+        Args:
+            future: Future devuelto por una llamada *_async (servicio o acción).
+
+        Returns:
+            El resultado del future una vez terminado.
+        """
         while not future.done():
             time.sleep(0.01)
         return future.result()
 
     def articulaciones_actuales(self) -> list:
-        """Devuelve la posición actual [rad] de las articulaciones del grupo."""
+        """Devuelve los ángulos actuales de las articulaciones del grupo.
+
+        Returns:
+            Lista con la posición [rad] de cada articulación, en el orden de
+            `self.articulaciones`.
+        """
         return [self.__estado_articulaciones[j] for j in self.articulaciones]
 
     def __ir_a(self, restricciones: Constraints, wait: bool) -> bool:
-        """Pide a MoveIt que planifique y ejecute un movimiento que cumpla `restricciones`."""
+        """Pide a MoveIt que planifique y ejecute un movimiento.
+
+        Args:
+            restricciones: condiciones que debe cumplir el robot al final del
+                movimiento (ángulos de las articulaciones o pose de la pinza).
+            wait: si es True espera a que el robot termine de moverse.
+
+        Returns:
+            Con wait=True, True si el movimiento se ha completado. Con wait=False, True
+            si MoveIt ha aceptado la petición. False si la rechaza o falla.
+        """
         goal = MoveGroup.Goal()
         goal.request.group_name = self.group_name
         goal.request.num_planning_attempts = 10
@@ -118,7 +160,17 @@ class ControlRobot(Node):
         return resultado.error_code.val == MoveItErrorCodes.SUCCESS
 
     def mover_articulaciones(self, joint_goal: List[float], wait: bool = True) -> bool:
-        """Mueve el robot a la configuración articular `joint_goal` [rad]."""
+        """Mueve el robot a unos ángulos articulares concretos.
+
+        Args:
+            joint_goal: ángulo objetivo [rad] de cada articulación, en el orden de
+                `self.articulaciones`.
+            wait: si es True espera a que el robot termine de moverse.
+
+        Returns:
+            True si el movimiento se ha completado (o aceptado, con wait=False);
+            False si MoveIt no lo consigue.
+        """
         restricciones = Constraints()
         for nombre, valor in zip(self.articulaciones, joint_goal):
             restricciones.joint_constraints.append(JointConstraint(
@@ -127,7 +179,12 @@ class ControlRobot(Node):
         return self.__ir_a(restricciones, wait)
 
     def pose_actual(self) -> Pose:
-        """Devuelve la pose del efector final respecto a SISTEMA_REFERENCIA (vía tf)."""
+        """Devuelve la pose actual de la pinza (efector final) leída de tf.
+
+        Returns:
+            Posición [m] y orientación (cuaternión) del efector final respecto a
+            SISTEMA_REFERENCIA.
+        """
         transformacion = self.tf_buffer.lookup_transform(
             SISTEMA_REFERENCIA, self.efector_final, rclpy.time.Time(),
             timeout=rclpy.duration.Duration(seconds=5.0))
@@ -139,14 +196,31 @@ class ControlRobot(Node):
         return pose
 
     def pose_a_stamped(self, pose: Pose) -> PoseStamped:
-        """Convierte `pose` en un PoseStamped referido a SISTEMA_REFERENCIA."""
+        """Añade a una pose el sistema de referencia en el que está expresada.
+
+        Args:
+            pose: pose expresada en SISTEMA_REFERENCIA.
+
+        Returns:
+            La misma pose como PoseStamped con frame_id = SISTEMA_REFERENCIA.
+        """
         pose_stamped = PoseStamped()
         pose_stamped.header.frame_id = SISTEMA_REFERENCIA
         pose_stamped.pose = pose
         return pose_stamped
 
     def mover_a_pose(self, pose_goal: Pose, wait: bool = True) -> bool:
-        """Mueve el efector final a `pose_goal` (posición y orientación)."""
+        """Mueve la pinza a una pose; MoveIt elige el camino.
+
+        Args:
+            pose_goal: posición [m] y orientación objetivo de la pinza respecto a
+                SISTEMA_REFERENCIA.
+            wait: si es True espera a que el robot termine de moverse.
+
+        Returns:
+            True si el movimiento se ha completado (o aceptado, con wait=False);
+            False si MoveIt no lo consigue.
+        """
         restriccion_posicion = PositionConstraint()
         restriccion_posicion.header.frame_id = SISTEMA_REFERENCIA
         restriccion_posicion.link_name = self.efector_final
@@ -171,7 +245,13 @@ class ControlRobot(Node):
 
     def añadir_caja_a_escena_de_planificacion(self, pose_caja: Pose, name: str,
                                               tamaño: tuple = (.1, .1, .1)) -> None:
-        """Añade una caja de colisión llamada `name` a la escena de planificación."""
+        """Añade una caja a la escena para que MoveIt la evite al planificar.
+
+        Args:
+            pose_caja: pose del centro de la caja respecto a SISTEMA_REFERENCIA.
+            name: identificador del objeto en la escena.
+            tamaño: dimensiones de la caja en X, Y y Z [m].
+        """
         caja = CollisionObject()
         caja.id = name
         caja.header.frame_id = SISTEMA_REFERENCIA
@@ -187,7 +267,21 @@ class ControlRobot(Node):
         self.__esperar(self.scene_client.call_async(peticion))
 
     def mover_trayectoria(self, poses: List[Pose], wait: bool = True) -> bool:
-        """Mueve el efector final en línea recta pasando por cada pose de `poses`."""
+        """Mueve la pinza en línea recta pasando por una lista de poses.
+
+        Usa compute_cartesian_path, así que entre cada par de poses la pinza va en
+        línea recta y sin chocar con la escena.
+
+        Args:
+            poses: poses por las que tiene que pasar la pinza, en orden. No hace falta
+                incluir la pose actual: se añade sola al principio.
+            wait: si es True espera a que el robot termine de moverse.
+
+        Returns:
+            True si el movimiento se ha completado (o aceptado, con wait=False);
+            False si no se puede hacer el camino recto completo (el robot no se mueve)
+            o si falla la ejecución.
+        """
         poses_aux = copy.deepcopy(poses)
         poses_aux.insert(0, self.pose_actual())
 
@@ -218,14 +312,22 @@ class ControlRobot(Node):
         return resultado.error_code.val == MoveItErrorCodes.SUCCESS
 
     def añadir_suelo(self) -> None:
-        """Añade el suelo como obstáculo para que MoveIt no planifique a través de él."""
+        """Añade el suelo a la escena para que MoveIt no planifique a través de él."""
         pose_suelo = Pose()
         pose_suelo.position.z = -0.026
         pose_suelo.orientation.w = 1.0
         self.añadir_caja_a_escena_de_planificacion(pose_suelo, "suelo", (2, 2, .05))
 
     def mover_pinza(self, anchura_dedos: float, fuerza: float) -> bool:
-        """Abre o cierra la pinza hasta `anchura_dedos` aplicando como máximo `fuerza`."""
+        """Abre o cierra la pinza.
+
+        Args:
+            anchura_dedos: separación objetivo entre los dedos.
+            fuerza: fuerza máxima que puede aplicar la pinza.
+
+        Returns:
+            True si la pinza ha llegado a la posición pedida; False si no.
+        """
         self.gripper_action_client.wait_for_server()
         goal = GripperCommand.Goal()
         goal.command.position = anchura_dedos

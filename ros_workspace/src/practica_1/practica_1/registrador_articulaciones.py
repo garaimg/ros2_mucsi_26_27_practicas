@@ -26,10 +26,21 @@ Muestra = Tuple[float, List[float]]
 
 
 class RegistradorArticulaciones(Node):
-    """Lee /joint_states en tiempo real y guarda un CSV por cada trayectoria registrada."""
+    """Nodo suscriptor que registra el estado cinemático de las articulaciones del brazo.
+
+    Se suscribe a /joint_states y, con cada mensaje, calcula la velocidad y la
+    aceleración de las 6 articulaciones. Mientras hay una trayectoria activa (entre
+    iniciar_trayectoria y finalizar_trayectoria) y el robot se está moviendo, guarda
+    una fila por mensaje. Al finalizar la trayectoria escribe esas filas en un CSV.
+    """
 
     def __init__(self, directorio_salida: Path) -> None:
-        """Crea la suscripción; los CSV se escribirán en `directorio_salida`."""
+        """Crea el nodo y la suscripción a /joint_states.
+
+        Args:
+            directorio_salida: carpeta donde se guardarán los CSV. Se crea si no existe
+                cuando se escribe el primer fichero.
+        """
         super().__init__("registrador_articulaciones")
         self._directorio_salida = directorio_salida
         # None mientras no se está registrando ninguna trayectoria
@@ -44,12 +55,24 @@ class RegistradorArticulaciones(Node):
         self.create_subscription(JointState, "/joint_states", self._cb_joint_states, 10)
 
     def iniciar_trayectoria(self, nombre: str) -> None:
-        """Empieza a guardar las muestras que lleguen como parte de la trayectoria `nombre`."""
+        """Empieza a registrar una trayectoria nueva.
+
+        Borra las filas que hubiera de la trayectoria anterior; a partir de aquí cada
+        mensaje de /joint_states con el robot en movimiento se guarda como parte de ella.
+
+        Args:
+            nombre: nombre de la trayectoria. Se usa como nombre del CSV (<nombre>.csv).
+        """
         self._filas = []
         self._trayectoria_actual = nombre
 
     def finalizar_trayectoria(self) -> None:
-        """Deja de registrar y escribe las muestras en <directorio_salida>/<nombre>.csv."""
+        """Deja de registrar y escribe la trayectoria en curso en su CSV.
+
+        El fichero se guarda en <directorio_salida>/<nombre>.csv con una cabecera y una
+        fila por muestra: tiempo, 6 posiciones, 6 velocidades y 6 aceleraciones.
+        Si el fichero ya existía se sobrescribe.
+        """
         nombre, filas = self._trayectoria_actual, self._filas
         # Se desactiva antes de escribir para que el callback no añada filas mientras tanto
         self._trayectoria_actual = None
@@ -67,7 +90,17 @@ class RegistradorArticulaciones(Node):
         self.get_logger().info(f"Guardadas {len(filas)} muestras en {ruta}")
 
     def _cb_joint_states(self, mensaje: JointState) -> None:
-        """Deriva la nueva lectura de posición y la guarda si el robot se está moviendo."""
+        """Procesa un mensaje de /joint_states (callback de la suscripción).
+
+        Saca las posiciones del brazo en el orden de ARTICULACIONES, calcula la
+        velocidad y la aceleración y, si hay una trayectoria activa y el robot se está
+        moviendo, añade la fila a las muestras. Los mensajes que no traen las
+        articulaciones del brazo (los de la pinza) o que llegan repetidos se ignoran.
+
+        Args:
+            mensaje: estado de las articulaciones publicado por el robot (nombres,
+                posiciones en rad y marca de tiempo en la cabecera).
+        """
         # El mensaje no trae las articulaciones en un orden fijo y la pinza puede
         # publicar mensajes propios sin las del brazo: se reordenan o se descartan
         try:
@@ -93,15 +126,35 @@ class RegistradorArticulaciones(Node):
 
     @staticmethod
     def _robot_en_movimiento(velocidad: List[float]) -> bool:
-        """Indica si alguna articulación se mueve más rápido que UMBRAL_VELOCIDAD."""
+        """Comprueba si el robot se está moviendo.
+
+        Args:
+            velocidad: velocidad de cada articulación [rad/s].
+
+        Returns:
+            True si al menos una articulación supera UMBRAL_VELOCIDAD (en valor
+            absoluto); False si todas están por debajo, es decir, el robot está parado.
+        """
         return any(abs(v) > UMBRAL_VELOCIDAD for v in velocidad)
 
     @staticmethod
     def _derivar(historial: Deque[Muestra], tiempo: float, valores: List[float]) -> List[float]:
-        """Añade (tiempo, valores) a `historial` y devuelve su derivada respecto al tiempo.
+        """Calcula la derivada respecto al tiempo de una magnitud de las articulaciones.
 
-        Es una diferencia finita hacia atrás entre la muestra nueva y la más antigua
-        del historial, que se recorta para que tenga una antigüedad de ~VENTANA_DERIVADA.
+        Añade la muestra nueva a `historial` y quita las que tienen más de
+        VENTANA_DERIVADA segundos de antigüedad. La derivada es una diferencia finita
+        hacia atrás entre la muestra nueva y la más antigua que queda en el historial.
+        Ojo: modifica `historial`.
+
+        Args:
+            historial: muestras anteriores de la magnitud (tiempo y valores).
+            tiempo: instante de la muestra nueva [s].
+            valores: valor de la magnitud en cada articulación en ese instante.
+
+        Returns:
+            Lista con la derivada de cada articulación (por ejemplo, si `valores` son
+            posiciones en rad, devuelve velocidades en rad/s). En la primera muestra,
+            cuando aún no hay con qué comparar, devuelve todo ceros.
         """
         historial.append((tiempo, valores))
         while len(historial) > 2 and tiempo - historial[1][0] >= VENTANA_DERIVADA:

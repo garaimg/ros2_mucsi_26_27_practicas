@@ -28,10 +28,24 @@ PUNTOS_CIRCULO = 36  # Nº de poses con las que se aproxima la circunferencia
 
 
 class EjecutorTrayectorias:
-    """Mueve el robot por las tres trayectorias mientras el registrador guarda sus datos."""
+    """Ejecuta las tres trayectorias de la práctica y coordina su registro.
+
+    No es un nodo de ROS: contiene los dos nodos del programa, ControlRobot (que
+    mueve el robot con MoveIt) y RegistradorArticulaciones (que guarda los datos),
+    y decide en qué orden se hace cada cosa.
+
+    Attributes:
+        control: nodo que manda los movimientos a MoveIt.
+        registrador: nodo suscriptor que registra los datos de cada trayectoria.
+    """
 
     def __init__(self) -> None:
-        """Conecta con MoveIt y añade el registrador al ejecutor de ROS de ControlRobot."""
+        """Crea los dos nodos y conecta el registrador al ejecutor de ROS.
+
+        ControlRobot ya tiene un ejecutor atendiendo callbacks en un hilo aparte; al
+        añadirle el registrador, este recibe /joint_states mientras el hilo principal
+        espera a que terminen los movimientos. Se bloquea hasta que MoveIt está listo.
+        """
         self.control = ControlRobot()
         self.registrador = RegistradorArticulaciones(DIRECTORIO_DATOS)
         # ControlRobot ya tiene un ejecutor atendiendo callbacks en otro hilo; así el
@@ -39,7 +53,12 @@ class EjecutorTrayectorias:
         self.control.ejecutor.add_node(self.registrador)
 
     def ejecutar(self) -> None:
-        """Ejecuta las trayectorias, volviendo a la posición de inicio antes de cada una."""
+        """Ejecuta, en orden, la trayectoria articular, la lineal y la circular.
+
+        Antes de cada una lleva el robot a ARTICULACIONES_INICIO (ese posicionamiento
+        no se registra). Cada trayectoria se guarda en su propio CSV. Se bloquea hasta
+        que el robot termina la última.
+        """
         trayectorias = {
             "articular": self._trayectoria_articular,
             "lineal": self._trayectoria_lineal,
@@ -51,13 +70,22 @@ class EjecutorTrayectorias:
             self._registrar(nombre, movimiento)
 
     def cerrar(self) -> None:
-        """Detiene el ejecutor de ROS y destruye los nodos."""
+        """Para el ejecutor de ROS y destruye los dos nodos.
+
+        Hay que llamarlo al terminar, antes de rclpy.try_shutdown().
+        """
         self.control.ejecutor.shutdown()
         self.registrador.destroy_node()
         self.control.destroy_node()
 
     def _registrar(self, nombre: str, movimiento: Callable[[], bool]) -> None:
-        """Ejecuta `movimiento` guardando sus datos como la trayectoria `nombre`."""
+        """Ejecuta un movimiento registrando sus datos como una trayectoria.
+
+        Args:
+            nombre: nombre de la trayectoria, que será también el nombre del CSV.
+            movimiento: función sin argumentos que mueve el robot y devuelve True si
+                el movimiento se ha completado bien. Por ejemplo, _trayectoria_lineal.
+        """
         self.registrador.iniciar_trayectoria(nombre)
         exito = movimiento()
         self.registrador.finalizar_trayectoria()
@@ -65,11 +93,26 @@ class EjecutorTrayectorias:
             self.control.get_logger().error(f"La trayectoria '{nombre}' ha fallado")
 
     def _trayectoria_articular(self) -> bool:
-        """Movimiento Joint: MoveIt elige libremente el camino en el espacio articular."""
+        """Movimiento Joint: lleva el robot a ARTICULACIONES_DESTINO.
+
+        Solo se fijan los ángulos finales; MoveIt elige el camino en el espacio
+        articular, así que la pinza no sigue una línea recta.
+
+        Returns:
+            True si MoveIt ha planificado y ejecutado el movimiento; False si no.
+        """
         return self.control.mover_articulaciones(ARTICULACIONES_DESTINO)
 
     def _trayectoria_lineal(self) -> bool:
-        """Movimiento lineal: dos tramos rectos del efector final (bajada en Z y avance en Y)."""
+        """Movimiento lineal: dos tramos rectos de la pinza desde la pose actual.
+
+        Primero baja DESCENSO_LINEAL metros en Z y después avanza AVANCE_LINEAL metros
+        en Y, sin cambiar la orientación de la pinza.
+
+        Returns:
+            True si se ha podido hacer el camino recto completo; False si MoveIt no lo
+            encuentra (en ese caso el robot no se mueve) o falla al ejecutarlo.
+        """
         pose = self.control.pose_actual()
         poses: List[Pose] = []
 
@@ -81,10 +124,16 @@ class EjecutorTrayectorias:
         return self.control.mover_trayectoria(poses)
 
     def _trayectoria_circular(self) -> bool:
-        """Movimiento circular: circunferencia horizontal que pasa por la pose actual.
+        """Movimiento circular: una vuelta completa en un plano horizontal.
 
         MoveIt no tiene un movimiento circular como tal, así que se aproxima con
-        PUNTOS_CIRCULO poses sobre la circunferencia unidas por tramos rectos.
+        PUNTOS_CIRCULO poses sobre una circunferencia de radio RADIO_CIRCULO unidas por
+        tramos rectos. La pose actual es el primer punto de la circunferencia y el
+        último coincide con ella, así que el robot acaba donde empezó.
+
+        Returns:
+            True si se ha completado la circunferencia; False si MoveIt no encuentra el
+            camino (en ese caso el robot no se mueve) o falla al ejecutarlo.
         """
         inicio = self.control.pose_actual()
         # El centro se coloca a RADIO_CIRCULO en -X para que la pose actual (ángulo 0)
@@ -104,7 +153,11 @@ class EjecutorTrayectorias:
 
 
 def main() -> None:
-    """Punto de entrada de `ros2 run practica_1 ejecutor_trayectorias`."""
+    """Punto de entrada de `ros2 run practica_1 ejecutor_trayectorias`.
+
+    Inicializa ROS, ejecuta las tres trayectorias y cierra todo al acabar o al
+    pulsar Ctrl+C.
+    """
     rclpy.init()
     ejecutor = EjecutorTrayectorias()
     try:
