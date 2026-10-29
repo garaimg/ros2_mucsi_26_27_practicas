@@ -1,15 +1,23 @@
-"""Suscriptor de /joint_states que registra posición, velocidad y aceleración articulares."""
+"""Nodo que calcula, publica y registra posición, velocidad y aceleración articulares."""
 
 import csv
 from collections import deque
 from pathlib import Path
 from typing import Deque, List, Optional, Tuple
 
+from practica_1_interfaces.msg import EstadoCinematico
 from rclpy.node import Node
 from rclpy.time import Time
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Header
 
 from practica_1.control_robot import ARTICULACIONES
+
+TOPIC_JOINT_STATES = "/joint_states"
+# Topic en el que se publica, en un solo mensaje, la posición, velocidad y aceleración
+TOPIC_ESTADO_CINEMATICO = "/estado_cinematico"
+# Nº de mensajes que ROS guarda en cola si el receptor va más lento que el emisor
+PROFUNDIDAD_COLA = 10
 
 # /joint_states llega cada ~2 ms y sus marcas de tiempo tienen jitter (la simulación no
 # es de tiempo real). Derivar entre dos muestras seguidas convierte ese jitter en picos
@@ -29,13 +37,15 @@ class RegistradorArticulaciones(Node):
     """Nodo suscriptor que registra el estado cinemático de las articulaciones del brazo.
 
     Se suscribe a /joint_states y, con cada mensaje, calcula la velocidad y la
-    aceleración de las 6 articulaciones. Mientras hay una trayectoria activa (entre
-    iniciar_trayectoria y finalizar_trayectoria) y el robot se está moviendo, guarda
-    una fila por mensaje. Al finalizar la trayectoria escribe esas filas en un CSV.
+    aceleración de las 6 articulaciones y publica las tres magnitudes juntas en
+    /estado_cinematico (mensaje EstadoCinematico). Mientras hay una trayectoria activa
+    (entre iniciar_trayectoria y finalizar_trayectoria) y el robot se está moviendo,
+    además guarda una fila por mensaje. Al finalizar la trayectoria escribe esas filas
+    en un CSV.
     """
 
     def __init__(self, directorio_salida: Path) -> None:
-        """Crea el nodo y la suscripción a /joint_states.
+        """Crea el nodo, la suscripción a /joint_states y el publicador del estado cinemático.
 
         Args:
             directorio_salida: carpeta donde se guardarán los CSV. Se crea si no existe
@@ -52,7 +62,10 @@ class RegistradorArticulaciones(Node):
         self._historial_posicion: Deque[Muestra] = deque()
         self._historial_velocidad: Deque[Muestra] = deque()
 
-        self.create_subscription(JointState, "/joint_states", self._cb_joint_states, 10)
+        self.create_subscription(
+            JointState, TOPIC_JOINT_STATES, self._cb_joint_states, PROFUNDIDAD_COLA)
+        self._publicador_estado = self.create_publisher(
+            EstadoCinematico, TOPIC_ESTADO_CINEMATICO, PROFUNDIDAD_COLA)
 
     def iniciar_trayectoria(self, nombre: str) -> None:
         """Empieza a registrar una trayectoria nueva.
@@ -93,8 +106,9 @@ class RegistradorArticulaciones(Node):
         """Procesa un mensaje de /joint_states (callback de la suscripción).
 
         Saca las posiciones del brazo en el orden de ARTICULACIONES, calcula la
-        velocidad y la aceleración y, si hay una trayectoria activa y el robot se está
-        moviendo, añade la fila a las muestras. Los mensajes que no traen las
+        velocidad y la aceleración, publica las tres en /estado_cinematico y, si hay
+        una trayectoria activa y el robot se está moviendo, añade la fila a las
+        muestras. Los mensajes que no traen las
         articulaciones del brazo (los de la pinza) o que llegan repetidos se ignoran.
 
         Args:
@@ -115,6 +129,9 @@ class RegistradorArticulaciones(Node):
         # completo cuando empiece a registrarse una
         velocidad = self._derivar(self._historial_posicion, tiempo, posicion)
         aceleracion = self._derivar(self._historial_velocidad, tiempo, velocidad)
+        # Se publica siempre (no solo durante las trayectorias) para poder seguir el
+        # estado del robot en directo, por ejemplo con `ros2 topic echo`
+        self._publicar_estado(mensaje.header, posicion, velocidad, aceleracion)
 
         if self._trayectoria_actual is None:
             return
@@ -123,6 +140,26 @@ class RegistradorArticulaciones(Node):
         if not self._robot_en_movimiento(velocidad):
             return
         self._filas.append([tiempo] + posicion + velocidad + aceleracion)
+
+    def _publicar_estado(self, cabecera: Header, posicion: List[float],
+                         velocidad: List[float], aceleracion: List[float]) -> None:
+        """Empaqueta posición, velocidad y aceleración en un EstadoCinematico y lo publica.
+
+        Args:
+            cabecera: cabecera del mensaje de /joint_states del que salen los datos. Se
+                reutiliza para que el mensaje publicado lleve su misma marca de tiempo
+                y se pueda relacionar con la lectura original.
+            posicion: posición de cada articulación [rad], en el orden de ARTICULACIONES.
+            velocidad: velocidad de cada articulación [rad/s], en el mismo orden.
+            aceleracion: aceleración de cada articulación [rad/s^2], en el mismo orden.
+        """
+        estado = EstadoCinematico()
+        estado.header = cabecera
+        estado.nombres = list(ARTICULACIONES)
+        estado.posicion = posicion
+        estado.velocidad = velocidad
+        estado.aceleracion = aceleracion
+        self._publicador_estado.publish(estado)
 
     @staticmethod
     def _robot_en_movimiento(velocidad: List[float]) -> bool:
