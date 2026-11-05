@@ -1,4 +1,4 @@
-"""Ejecuta una trayectoria articular, una lineal y una circular registrando cada una por separado."""
+"""Ejecuta las trayectorias articular, lineal y circular, registrando cada una aparte."""
 
 import copy
 from math import cos, pi, sin
