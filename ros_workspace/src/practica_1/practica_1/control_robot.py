@@ -8,6 +8,7 @@ from typing import List
 
 import rclpy
 from control_msgs.action import GripperCommand
+from controller_manager_msgs.srv import ListControllers
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import (
@@ -34,6 +35,14 @@ EFECTOR_FINAL = "wrist_3_link"
 ARTICULACIONES = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                   "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
 FACTOR_ESCALA = 0.1  # Velocidad y aceleración máximas (fracción de las máximas del robot)
+
+# Controlador que usa MoveIt para ejecutar las trayectorias (moveit_controllers.yaml).
+# Al lanzar la simulación se activa unos segundos después de que MoveIt esté listo, y
+# si se le mandan movimientos antes, MoveIt los rechaza al momento
+CONTROLADOR_TRAYECTORIAS = "scaled_joint_trajectory_controller"
+SERVICIO_LISTA_CONTROLADORES = "/controller_manager/list_controllers"
+ESTADO_CONTROLADOR_ACTIVO = "active"
+PERIODO_CONSULTA_CONTROLADOR = 0.5  # [s] cada cuánto se pregunta si ya está activo
 
 
 class ControlRobot(Node):
@@ -92,6 +101,7 @@ class ControlRobot(Node):
         self.scene_client.wait_for_service()
         while not all(j in self.__estado_articulaciones for j in self.articulaciones):
             time.sleep(0.05)
+        self._esperar_controlador_activo()
 
         self.añadir_suelo()
 
@@ -103,6 +113,27 @@ class ControlRobot(Node):
         """
         for nombre, posicion in zip(msg.name, msg.position):
             self.__estado_articulaciones[nombre] = posicion
+
+    def _esperar_controlador_activo(self) -> None:
+        """Se bloquea hasta que el controlador que ejecuta las trayectorias está activo.
+
+        Que MoveIt esté disponible no basta: al arrancar la simulación, los
+        controladores de ros2_control se cargan y activan después. Tampoco sirve
+        esperar a su acción follow_joint_trajectory, porque existe en cuanto el
+        controlador se carga, aunque aún no esté activo. Por eso se pregunta su estado
+        al controller_manager hasta que sea ESTADO_CONTROLADOR_ACTIVO.
+        """
+        cliente = self.create_client(ListControllers, SERVICIO_LISTA_CONTROLADORES)
+        self.get_logger().info(f"Esperando a que se active {CONTROLADOR_TRAYECTORIAS}...")
+        cliente.wait_for_service()
+        while True:
+            respuesta = self.__esperar(cliente.call_async(ListControllers.Request()))
+            estados = {c.name: c.state for c in respuesta.controller}
+            if estados.get(CONTROLADOR_TRAYECTORIAS) == ESTADO_CONTROLADOR_ACTIVO:
+                break
+            time.sleep(PERIODO_CONSULTA_CONTROLADOR)
+        self.destroy_client(cliente)
+        self.get_logger().info("Robot listo para moverse")
 
     @staticmethod
     def __esperar(future):
