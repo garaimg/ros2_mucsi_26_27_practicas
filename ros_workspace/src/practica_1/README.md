@@ -149,14 +149,11 @@ Todos estos comandos van dentro del contenedor, con el `source` hecho.
   ros2 run rqt_graph rqt_graph
   ```
 
-## Problemas frecuentes
+## Problemas que hemos tenido
 
-- **`Package 'practica_1' not found`:** falta el `source` en esa terminal.
-- **El programa se queda en `Esperando a MoveIt (move_group)...`:** la simulación no está lanzada o todavía está arrancando. Con `run`, comprueba que `./lab.sh sim 203` está en marcha.
 - **`topic [/estado_cinematico] does not appear to be published yet`:** el programa no está en marcha. Indica el tipo del mensaje, como en las comprobaciones, para que el `echo` espere.
 - **`./lab.sh compilar` falla en `practica_1_interfaces` con `failed to create symbolic link`:** quedan restos de una compilación anterior. Dentro del contenedor, ejecuta lo siguiente y vuelve a compilar:
   ```bash
   rm -rf ~/ros_workspace/build/practica_1_interfaces ~/ros_workspace/install/practica_1_interfaces
   ```
 - **No lances la simulación dos veces:** con `./lab.sh sim` abierto, usa `run` o `launch` con `simulacion:=false`.
-- **Errores normales en el log:** al arrancar salen `No 3D sensor plugin` y `/recognize_objects not available`, que son de la simulación base. Al cerrar con `Ctrl+C` salen `process has died`.
