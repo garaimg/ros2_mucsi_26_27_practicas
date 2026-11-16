@@ -1,0 +1,11 @@
+# Práctica 2: da acceso a una cámara USB al contenedor "desktop".
+# Los perfiles del laboratorio (--lab, --lab-gpu) son privilegiados y ya la ven.
+#
+# Uso (desde la raíz del repositorio, con la cámara ya visible en /dev/video0):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.camara.yml ./lab.sh iniciar
+# lab.sh llama a "docker compose" sin indicar fichero, así que respeta COMPOSE_FILE.
+# Para otra cámara: CAMARA=/dev/video2 COMPOSE_FILE=... ./lab.sh iniciar
+services:
+  desktop:
+    devices:
+      - ${CAMARA:-/dev/video0}:${CAMARA:-/dev/video0}
