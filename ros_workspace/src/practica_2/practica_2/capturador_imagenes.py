@@ -7,8 +7,8 @@ import cv2
 from cv_bridge import CvBridge
 import numpy as np
 import rclpy
-from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Image
 
 TOPIC_IMAGEN = '/usb_cam/image_raw'
@@ -127,13 +127,15 @@ def main() -> None:
 
     Atiende la suscripción hasta guardar todas las imágenes o pulsar Ctrl+C.
     """
-    rclpy.init()
+    # Sin el gestor de señales de rclpy, Ctrl+C llega como KeyboardInterrupt y corta el
+    # spin con ROS aún activo. Con él, ROS se cerraría en mitad de un callback y
+    # publicar o destruir el nodo fallaría con un error
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     nodo = CapturadorImagenes()
     try:
         while rclpy.ok() and not nodo.terminado:
             rclpy.spin_once(nodo)
-    except (KeyboardInterrupt, ExternalShutdownException):
-        # Ctrl+C: según cuándo llegue, rclpy lo convierte en una u otra excepción
+    except KeyboardInterrupt:
         pass
     nodo.destroy_node()
     rclpy.try_shutdown()
