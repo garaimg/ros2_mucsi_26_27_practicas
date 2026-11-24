@@ -220,7 +220,7 @@ Con la cámara en marcha:
 ros2 run practica_2 corrector_distorsion
 ```
 
-En `rqt_image_view`, elige en el desplegable `/imagen_corregida` y compárala con `/usb_cam/image_raw`. Las líneas rectas que salían curvadas cerca de los bordes ahora salen rectas.
+En `rqt_image_view`, elige en el desplegable `/imagen_corregida` y compárala con `/usb_cam/image_raw` (**puede ser necesario darle al botón de "refresh topics"**). Las líneas rectas que salían curvadas cerca de los bordes ahora salen rectas.
 
 Cómo funciona, por cada imagen:
 
