@@ -239,7 +239,7 @@ ros2 run practica_2 corrector_distorsion --ros-args -p alpha:=1.0
 
 ### Todo junto
 
-Con la cámara ya calibrada, este launch abre la cámara, el visor y la corrección a la vez. Acepta los mismos argumentos que `camara.launch.py`:
+Con la cámara ya calibrada, este launch abre la cámara, el visor y la corrección a la vez. Acepta los mismos argumentos que `camara.launch.py` (**para ver todos los topics puede ser necesario darle al botón de "refresh topics"**):
 
 ```bash
 ros2 launch practica_2 practica_2.launch.py
